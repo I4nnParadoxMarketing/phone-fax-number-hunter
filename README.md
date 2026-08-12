@@ -149,7 +149,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `MAX_PAGES` | Maximum pages to crawl per search | `100` |
+| `MAX_PAGES` | Maximum pages to crawl per search | `100` (up to `20000`) |
 | `CRAWL_DELAY_MS` | Delay between requests (politeness) | `500` |
 | `REQUEST_TIMEOUT_MS` | Per-page fetch timeout | `10000` |
 

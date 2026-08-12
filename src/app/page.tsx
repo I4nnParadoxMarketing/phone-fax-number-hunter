@@ -326,13 +326,13 @@ export default function HomePage() {
                 id="maxPages"
                 type="number"
                 min={1}
-                max={200}
+                max={20000}
                 value={maxPages}
                 onChange={(e) => setMaxPages(Number(e.target.value))}
                 className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 outline-none ring-[var(--primary)] focus:ring-2"
               />
               <p className="text-xs text-[var(--muted)]">
-                Use 5–10 pages on the free Vercel plan to avoid timeouts.
+                Up to 20,000 pages. Large scans may time out on Vercel — use fewer pages on the free plan.
               </p>
             </div>
           </div>

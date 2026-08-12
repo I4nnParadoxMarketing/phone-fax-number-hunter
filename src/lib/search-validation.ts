@@ -12,7 +12,7 @@ export function parseMaxPages(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return undefined;
-  return Math.min(Math.floor(parsed), 200);
+  return Math.min(Math.floor(parsed), 20000);
 }
 
 export function validateSearchRequest(body: SearchRequest): {
