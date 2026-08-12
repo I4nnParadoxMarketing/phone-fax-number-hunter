@@ -25,6 +25,7 @@ export interface CrawlProgress {
 
 export type SearchStreamEvent =
   | ({ type: "progress" } & CrawlProgress)
+  | { type: "match"; pageUrl: string; matches: SearchMatch[] }
   | ({ type: "complete" } & SearchResponse)
   | { type: "error"; message: string };
 

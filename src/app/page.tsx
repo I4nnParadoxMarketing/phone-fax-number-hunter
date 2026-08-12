@@ -39,6 +39,18 @@ function downloadCsv(matches: SearchMatch[]) {
   URL.revokeObjectURL(url);
 }
 
+function groupMatchesByPage(matches: SearchMatch[]): [string, SearchMatch[]][] {
+  const groups = new Map<string, SearchMatch[]>();
+
+  for (const match of matches) {
+    const existing = groups.get(match.pageUrl) ?? [];
+    existing.push(match);
+    groups.set(match.pageUrl, existing);
+  }
+
+  return [...groups.entries()];
+}
+
 async function runSearch(
   payload: {
     url: string;
@@ -47,6 +59,7 @@ async function runSearch(
     maxPages: number;
   },
   onProgress: (progress: CrawlProgress) => void,
+  onMatch: (pageUrl: string, matches: SearchMatch[]) => void,
 ): Promise<SearchResponse> {
   const response = await fetch("/api/search", {
     method: "POST",
@@ -95,6 +108,10 @@ async function runSearch(
         });
       }
 
+      if (event.type === "match") {
+        onMatch(event.pageUrl, event.matches);
+      }
+
       if (event.type === "error") {
         throw new Error(event.message);
       }
@@ -122,6 +139,7 @@ export default function HomePage() {
   const [maxPages, setMaxPages] = useState(10);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<CrawlProgress | null>(null);
+  const [liveMatches, setLiveMatches] = useState<SearchMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SearchResponse | null>(null);
 
@@ -130,6 +148,15 @@ export default function HomePage() {
     return Math.min(100, Math.round((progress.pagesScanned / progress.maxPages) * 100));
   }, [progress]);
 
+  const groupedResults = useMemo(
+    () => (result ? groupMatchesByPage(result.matches) : []),
+    [result],
+  );
+
+  const groupedLiveMatches = useMemo(
+    () => (liveMatches.length > 0 ? groupMatchesByPage(liveMatches) : []),
+    [liveMatches],
+  );
   const queryLabel = useMemo(() => {
     if (searchType === "text") return "Text to search";
     if (searchType === "fax") return "Specific fax number (optional)";
@@ -140,6 +167,7 @@ export default function HomePage() {
     event.preventDefault();
     setLoading(true);
     setProgress(null);
+    setLiveMatches([]);
     setError(null);
     setResult(null);
 
@@ -152,6 +180,12 @@ export default function HomePage() {
           maxPages,
         },
         setProgress,
+        (pageUrl, matches) => {
+          setLiveMatches((current) => [
+            ...current,
+            ...matches.map((match) => ({ ...match, pageUrl })),
+          ]);
+        },
       );
 
       setResult(data);
@@ -160,6 +194,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
       setProgress(null);
+      setLiveMatches([]);
     }
   }
 
@@ -318,6 +353,35 @@ export default function HomePage() {
                 <p className="text-sm text-[var(--muted)]">Currently searching</p>
                 <p className="mt-1 break-all text-sm font-medium">{progress.currentUrl}</p>
               </div>
+
+              {groupedLiveMatches.length > 0 && (
+                <div className="space-y-3 border-t border-[var(--border)] pt-4">
+                  <p className="text-sm font-medium">Found on these pages</p>
+                  <div className="space-y-3">
+                    {groupedLiveMatches.map(([pageUrl, pageMatches]) => (
+                      <div
+                        key={pageUrl}
+                        className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-3"
+                      >
+                        <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                          Page URL
+                        </p>
+                        <a
+                          href={pageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 block break-all text-sm text-[var(--primary)] hover:underline"
+                        >
+                          {pageUrl}
+                        </a>
+                        <p className="mt-2 text-xs text-[var(--muted)]">
+                          {pageMatches.length} match{pageMatches.length === 1 ? "" : "es"} on this page
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -380,43 +444,35 @@ export default function HomePage() {
               No matches found. Try a different query or increase the page limit.
             </div>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="border-b border-[var(--border)] bg-[var(--background)]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">Page</th>
-                      <th className="px-4 py-3 font-medium">Match</th>
-                      <th className="px-4 py-3 font-medium">Context</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.matches.map((match, index) => (
-                      <tr
-                        key={`${match.pageUrl}-${match.match}-${index}`}
-                        className="border-b border-[var(--border)] last:border-b-0"
-                      >
-                        <td className="max-w-xs px-4 py-3 align-top">
-                          <a
-                            href={match.pageUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="break-all text-[var(--primary)] hover:underline"
-                          >
-                            {match.pageUrl}
-                          </a>
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 align-top font-medium">
-                          {match.match}
-                        </td>
-                        <td className="max-w-md px-4 py-3 align-top text-[var(--muted)]">
-                          {match.context}
-                        </td>
-                      </tr>
+            <div className="space-y-4">
+              {groupedResults.map(([pageUrl, pageMatches]) => (
+                <article
+                  key={pageUrl}
+                  className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]"
+                >
+                  <div className="border-b border-[var(--border)] bg-[var(--background)] px-4 py-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                      Page URL
+                    </p>
+                    <a
+                      href={pageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 block break-all font-medium text-[var(--primary)] hover:underline"
+                    >
+                      {pageUrl}
+                    </a>
+                  </div>
+                  <ul className="divide-y divide-[var(--border)]">
+                    {pageMatches.map((match, index) => (
+                      <li key={`${match.match}-${index}`} className="px-4 py-3">
+                        <p className="font-semibold">{match.match}</p>
+                        <p className="mt-1 text-sm text-[var(--muted)]">{match.context}</p>
+                      </li>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </ul>
+                </article>
+              ))}
             </div>
           )}
         </section>

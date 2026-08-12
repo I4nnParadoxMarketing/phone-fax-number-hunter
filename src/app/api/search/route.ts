@@ -39,6 +39,15 @@ export async function POST(request: Request) {
             const event: SearchStreamEvent = { type: "progress", ...progress };
             controller.enqueue(createStreamEvent(event));
           },
+          onPageMatches: (pageUrl, pageMatches) => {
+            controller.enqueue(
+              createStreamEvent({
+                type: "match",
+                pageUrl,
+                matches: pageMatches,
+              }),
+            );
+          },
         });
 
         const response: SearchResponse = {

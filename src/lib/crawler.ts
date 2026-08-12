@@ -12,6 +12,7 @@ export interface CrawlOptions {
   crawlDelayMs?: number;
   requestTimeoutMs?: number;
   onProgress?: (progress: CrawlProgress) => void;
+  onPageMatches?: (pageUrl: string, pageMatches: SearchMatch[]) => void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -122,6 +123,10 @@ export async function crawlSite(
 
     const pageMatches = extractFromHtml(result.html, currentUrl, searchType, query);
     matches.push(...pageMatches);
+
+    if (pageMatches.length > 0) {
+      options.onPageMatches?.(currentUrl, pageMatches);
+    }
 
     reportProgress("parsed");
 
