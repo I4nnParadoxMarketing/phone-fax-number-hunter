@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Phone & Fax Number Hunter",
+  title: "Phone & Fax Number Hunter by Paradox Marketing",
   description: "Search entire websites for phone numbers, fax numbers, or custom text.",
 };
 
