@@ -4,6 +4,8 @@ Search any website for phone numbers, fax numbers, or custom text — across the
 
 Enter a URL, choose what to look for, and get back every match with the page it was found on.
 
+**Live app:** [https://phone-fax-number-hunter.vercel.app/](https://phone-fax-number-hunter.vercel.app/)
+
 ---
 
 ## Overview
@@ -47,11 +49,11 @@ Enter a URL, choose what to look for, and get back every match with the page it 
 
 ---
 
-## Usage *(planned)*
+## Usage
 
 ### Web UI
 
-1. Open the app in your browser.
+1. Open the [live app](https://phone-fax-number-hunter.vercel.app/) or run it locally.
 2. Enter the **Website URL** to scan (e.g. `https://company.com`).
 3. Choose search mode:
    - **Phone number** — find all phone numbers on the site
