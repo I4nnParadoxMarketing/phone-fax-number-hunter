@@ -1,6 +1,6 @@
-import { getBaseUrl, isBackgroundStorageConfigured, saveJob, scheduleJobTick } from "@/lib/job-store";
+import { getBaseUrl, isBackgroundStorageConfigured, saveJob } from "@/lib/job-store";
 import type { SearchJob } from "@/lib/job-types";
-import { jobToProgress } from "@/lib/job-processor";
+import { jobToProgress, processJobTick } from "@/lib/job-processor";
 import { planScanUrls } from "@/lib/plan-urls";
 import { validateSearchRequest } from "@/lib/search-validation";
 import type { SearchRequest } from "@/lib/types";
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     await saveJob(job);
 
     const baseUrl = getBaseUrl(request);
-    void scheduleJobTick(job.id, baseUrl).catch(async (error) => {
+    void processJobTick(job, baseUrl).catch(async (error) => {
       job.status = "failed";
       job.errorMessage = error instanceof Error ? error.message : "Could not start background job";
       await saveJob(job);

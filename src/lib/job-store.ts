@@ -54,30 +54,31 @@ export function isBackgroundStorageConfigured(): boolean {
 export async function saveJob(job: SearchJob): Promise<void> {
   job.updatedAt = new Date().toISOString();
 
+  if (process.env.NODE_ENV !== "production") {
+    await saveJobLocal(job);
+    return;
+  }
+
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     await saveJobBlob(job);
     return;
   }
 
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "Background search requires Vercel Blob storage. Add Blob to your Vercel project, then redeploy.",
-    );
-  }
-
-  await saveJobLocal(job);
+  throw new Error(
+    "Background search requires Vercel Blob storage. Add Blob to your Vercel project, then redeploy.",
+  );
 }
 
 export async function loadJob(id: string): Promise<SearchJob | null> {
+  if (process.env.NODE_ENV !== "production") {
+    return loadJobLocal(id);
+  }
+
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     return loadJobBlob(id);
   }
 
-  if (process.env.NODE_ENV === "production") {
-    return null;
-  }
-
-  return loadJobLocal(id);
+  return null;
 }
 
 export function getJobSecret(): string {
@@ -95,7 +96,7 @@ export function getBaseUrl(request?: Request): string {
     if (host) return `${proto}://${host}`;
   }
 
-  return "http://localhost:3000";
+  return process.env.NEXT_PUBLIC_APP_URL ?? `http://localhost:${process.env.PORT ?? "3000"}`;
 }
 
 export async function scheduleJobTick(jobId: string, baseUrl: string): Promise<void> {

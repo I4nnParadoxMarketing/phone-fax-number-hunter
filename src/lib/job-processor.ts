@@ -54,7 +54,10 @@ export async function processJobTick(job: SearchJob, baseUrl: string): Promise<S
     return job;
   }
 
-  await saveJob(job);
+  if (process.env.NODE_ENV !== "production") {
+    return processJobTick(job, baseUrl);
+  }
+
   await scheduleJobTick(job.id, baseUrl);
   return job;
 }

@@ -460,7 +460,22 @@ export default function HomePage() {
 
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-          {error}
+          <p>{error}</p>
+          {activeJobId && (
+            <button
+              type="button"
+              onClick={() => {
+                stopPolling();
+                localStorage.removeItem(JOB_STORAGE_KEY);
+                setActiveJobId(null);
+                setError(null);
+                setLoading(false);
+              }}
+              className="mt-3 text-sm font-medium underline"
+            >
+              Clear saved search and try again
+            </button>
+          )}
         </div>
       )}
 
