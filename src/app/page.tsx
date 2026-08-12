@@ -21,12 +21,12 @@ const SEARCH_TYPES: { value: SearchType; label: string; description: string }[] 
   {
     value: "phone",
     label: "Phone numbers",
-    description: "Find all phone numbers, or filter by a specific number",
+    description: "Find numbers in page text, tel: links, and call links",
   },
   {
     value: "fax",
     label: "Fax numbers",
-    description: "Find fax lines labeled on the site, or filter by number",
+    description: "Find fax lines in text, links, and labeled fields",
   },
   {
     value: "text",
