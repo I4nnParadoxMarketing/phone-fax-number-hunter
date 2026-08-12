@@ -1,18 +1,11 @@
-import { NextResponse } from "next/server";
 import { crawlSite } from "@/lib/crawler";
-import type { SearchRequest, SearchResponse, SearchType } from "@/lib/types";
+import { validateSearchRequest } from "@/lib/search-validation";
+import type { SearchRequest, SearchResponse, SearchStreamEvent } from "@/lib/types";
 
 export const maxDuration = 60;
 
-function isSearchType(value: unknown): value is SearchType {
-  return value === "phone" || value === "fax" || value === "text";
-}
-
-function parseMaxPages(value: unknown): number | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) return undefined;
-  return Math.min(Math.floor(parsed), 200);
+function createStreamEvent(event: SearchStreamEvent): Uint8Array {
+  return new TextEncoder().encode(`${JSON.stringify(event)}\n`);
 }
 
 export async function POST(request: Request) {
@@ -21,51 +14,61 @@ export async function POST(request: Request) {
   try {
     body = (await request.json()) as SearchRequest;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
-  const { url, searchType, query, maxPages: rawMaxPages } = body;
-
-  if (!url || typeof url !== "string") {
-    return NextResponse.json({ error: "Website URL is required" }, { status: 400 });
+  const validation = validateSearchRequest(body);
+  if (!validation.ok) {
+    return new Response(JSON.stringify({ error: validation.error }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
-  if (!isSearchType(searchType)) {
-    return NextResponse.json(
-      { error: "searchType must be phone, fax, or text" },
-      { status: 400 },
-    );
-  }
+  const { url, searchType, query, maxPages } = validation.data;
 
-  if (searchType === "text" && !query?.trim()) {
-    return NextResponse.json(
-      { error: "Query text is required for text search" },
-      { status: 400 },
-    );
-  }
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        const { matches, pagesScanned, errors } = await crawlSite(url, searchType, query, {
+          maxPages,
+          onProgress: (progress) => {
+            const event: SearchStreamEvent = { type: "progress", ...progress };
+            controller.enqueue(createStreamEvent(event));
+          },
+        });
 
-  const maxPages = parseMaxPages(rawMaxPages);
+        const response: SearchResponse = {
+          startUrl: url,
+          searchType,
+          query,
+          pagesScanned,
+          matches,
+          errors,
+        };
 
-  try {
-    const { matches, pagesScanned, errors } = await crawlSite(
-      url.trim(),
-      searchType,
-      query?.trim() || undefined,
-      { maxPages },
-    );
+        controller.enqueue(
+          createStreamEvent({
+            type: "complete",
+            ...response,
+          }),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Search failed";
+        controller.enqueue(createStreamEvent({ type: "error", message }));
+      } finally {
+        controller.close();
+      }
+    },
+  });
 
-    const response: SearchResponse = {
-      startUrl: url.trim(),
-      searchType,
-      query: query?.trim() || undefined,
-      pagesScanned,
-      matches,
-      errors,
-    };
-
-    return NextResponse.json(response);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Search failed";
-    return NextResponse.json({ error: message }, { status: 400 });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-cache, no-transform",
+    },
+  });
 }

@@ -18,7 +18,15 @@ export interface CrawlProgress {
   pagesScanned: number;
   pagesQueued: number;
   currentUrl: string;
+  matchesFound: number;
+  maxPages: number;
+  status: "fetching" | "parsed";
 }
+
+export type SearchStreamEvent =
+  | ({ type: "progress" } & CrawlProgress)
+  | ({ type: "complete" } & SearchResponse)
+  | { type: "error"; message: string };
 
 export interface SearchResponse {
   startUrl: string;

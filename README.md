@@ -169,7 +169,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 - [x] Phone and fax number detection and normalization
 - [x] Custom text search
 - [x] Results table with CSV export
-- [ ] Live crawl progress indicator (streaming)
+- [x] Live crawl progress indicator (streaming)
 - [ ] Respect `robots.txt`
 - [ ] Optional JavaScript rendering (Playwright)
 
@@ -184,3 +184,9 @@ TBD
 ## Contributing
 
 Contributions welcome once the initial codebase is in place. Open an issue or pull request to discuss changes.
+
+---
+
+## Credits
+
+Built by **Paradox Marketing**.

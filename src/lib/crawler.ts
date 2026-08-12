@@ -3,6 +3,7 @@ import type { CrawlProgress, SearchMatch, SearchType } from "./types";
 
 const DEFAULT_MAX_PAGES = 100;
 const DEFAULT_CRAWL_DELAY_MS = 500;
+const VERCEL_CRAWL_DELAY_MS = 150;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const USER_AGENT = "PhoneFaxNumberHunter/1.0 (+https://github.com/phone-fax-number-hunter)";
 
@@ -68,7 +69,9 @@ export async function crawlSite(
   options: CrawlOptions = {},
 ): Promise<{ matches: SearchMatch[]; pagesScanned: number; errors: string[] }> {
   const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
-  const crawlDelayMs = options.crawlDelayMs ?? DEFAULT_CRAWL_DELAY_MS;
+  const crawlDelayMs =
+    options.crawlDelayMs ??
+    (process.env.VERCEL ? VERCEL_CRAWL_DELAY_MS : DEFAULT_CRAWL_DELAY_MS);
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
   let parsedStart: URL;
@@ -95,11 +98,18 @@ export async function crawlSite(
     if (visited.has(currentUrl)) continue;
     visited.add(currentUrl);
 
-    options.onProgress?.({
-      pagesScanned,
-      pagesQueued: queue.length,
-      currentUrl,
-    });
+    const reportProgress = (status: CrawlProgress["status"]) => {
+      options.onProgress?.({
+        pagesScanned,
+        pagesQueued: queue.length,
+        currentUrl,
+        matchesFound: matches.length,
+        maxPages,
+        status,
+      });
+    };
+
+    reportProgress("fetching");
 
     const result = await fetchPage(currentUrl, requestTimeoutMs);
 
@@ -112,6 +122,8 @@ export async function crawlSite(
 
     const pageMatches = extractFromHtml(result.html, currentUrl, searchType, query);
     matches.push(...pageMatches);
+
+    reportProgress("parsed");
 
     const links = extractLinks(result.html, new URL(currentUrl));
     for (const link of links) {

@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import type { SearchMatch, SearchResponse, SearchType } from "@/lib/types";
+import { parseStreamLine, readResponseError } from "@/lib/read-response-error";
+import type { CrawlProgress, SearchMatch, SearchResponse, SearchType, SearchStreamEvent } from "@/lib/types";
 
 const SEARCH_TYPES: { value: SearchType; label: string; description: string }[] = [
   {
@@ -38,14 +39,96 @@ function downloadCsv(matches: SearchMatch[]) {
   URL.revokeObjectURL(url);
 }
 
+async function runSearch(
+  payload: {
+    url: string;
+    searchType: SearchType;
+    query?: string;
+    maxPages: number;
+  },
+  onProgress: (progress: CrawlProgress) => void,
+): Promise<SearchResponse> {
+  const response = await fetch("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("ndjson")) {
+    throw new Error(await readResponseError(response));
+  }
+
+  if (!response.body) {
+    throw new Error("Search failed: no response stream");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+
+      const event = parseStreamLine(line) as SearchStreamEvent;
+
+      if (event.type === "progress") {
+        onProgress({
+          pagesScanned: event.pagesScanned,
+          pagesQueued: event.pagesQueued,
+          currentUrl: event.currentUrl,
+          matchesFound: event.matchesFound,
+          maxPages: event.maxPages,
+          status: event.status,
+        });
+      }
+
+      if (event.type === "error") {
+        throw new Error(event.message);
+      }
+
+      if (event.type === "complete") {
+        return {
+          startUrl: event.startUrl,
+          searchType: event.searchType,
+          query: event.query,
+          pagesScanned: event.pagesScanned,
+          matches: event.matches,
+          errors: event.errors,
+        };
+      }
+    }
+  }
+
+  throw new Error("Search ended before results were received");
+}
+
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [searchType, setSearchType] = useState<SearchType>("phone");
   const [query, setQuery] = useState("");
-  const [maxPages, setMaxPages] = useState(50);
+  const [maxPages, setMaxPages] = useState(10);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<CrawlProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SearchResponse | null>(null);
+
+  const progressPercent = useMemo(() => {
+    if (!progress || progress.maxPages <= 0) return 0;
+    return Math.min(100, Math.round((progress.pagesScanned / progress.maxPages) * 100));
+  }, [progress]);
 
   const queryLabel = useMemo(() => {
     if (searchType === "text") return "Text to search";
@@ -56,32 +139,27 @@ export default function HomePage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
+    setProgress(null);
     setError(null);
     setResult(null);
 
     try {
-      const response = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await runSearch(
+        {
           url,
           searchType,
           query: query.trim() || undefined,
           maxPages,
-        }),
-      });
+        },
+        setProgress,
+      );
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "Search failed");
-      }
-
-      setResult(data as SearchResponse);
+      setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }
 
@@ -177,6 +255,9 @@ export default function HomePage() {
                 onChange={(e) => setMaxPages(Number(e.target.value))}
                 className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 outline-none ring-[var(--primary)] focus:ring-2"
               />
+              <p className="text-xs text-[var(--muted)]">
+                Use 5–10 pages on the free Vercel plan to avoid timeouts.
+              </p>
             </div>
           </div>
 
@@ -189,6 +270,65 @@ export default function HomePage() {
           </button>
         </form>
       </section>
+
+      {loading && progress && (
+        <section
+          className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm"
+          aria-live="polite"
+        >
+          <div className="flex items-start gap-4">
+            <div
+              className="mt-1 h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]"
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1 space-y-4">
+              <div>
+                <p className="font-medium">
+                  {progress.status === "fetching" ? "Fetching page…" : "Scanning page…"}
+                </p>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Page{" "}
+                  {progress.status === "fetching"
+                    ? progress.pagesScanned + 1
+                    : progress.pagesScanned}{" "}
+                  of {progress.maxPages}
+                  {progress.pagesQueued > 0 && ` · ${progress.pagesQueued} more in queue`}
+                </p>
+              </div>
+
+              <div className="h-2 overflow-hidden rounded-full bg-[var(--background)]">
+                <div
+                  className="h-full rounded-full bg-[var(--primary)] transition-all duration-300"
+                  style={{ width: `${Math.max(progressPercent, progress.pagesScanned > 0 ? 8 : 4)}%` }}
+                />
+              </div>
+
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-[var(--muted)]">Matches found</dt>
+                  <dd className="text-lg font-semibold">{progress.matchesFound}</dd>
+                </div>
+                <div>
+                  <dt className="text-[var(--muted)]">Pages scanned</dt>
+                  <dd className="text-lg font-semibold">{progress.pagesScanned}</dd>
+                </div>
+              </dl>
+
+              <div>
+                <p className="text-sm text-[var(--muted)]">Currently searching</p>
+                <p className="mt-1 break-all text-sm font-medium">{progress.currentUrl}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {loading && !progress && (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] px-6 py-8 text-center">
+          <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
+          <p className="font-medium">Starting site scan…</p>
+        </section>
+      )}
 
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
@@ -281,6 +421,11 @@ export default function HomePage() {
           )}
         </section>
       )}
+
+      <footer className="mt-auto border-t border-[var(--border)] pt-6 text-center text-sm text-[var(--muted)]">
+        Built by{" "}
+        <span className="font-medium text-[var(--foreground)]">Paradox Marketing</span>
+      </footer>
     </main>
   );
 }
