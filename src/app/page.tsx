@@ -22,23 +22,6 @@ const SEARCH_TYPES: { value: SearchType; label: string; description: string }[] 
   },
 ];
 
-function downloadCsv(matches: SearchMatch[]) {
-  const header = ["Page URL", "Match", "Context", "Type"];
-  const rows = matches.map((m) =>
-    [m.pageUrl, m.match, m.context, m.searchType]
-      .map((value) => `"${value.replace(/"/g, '""')}"`)
-      .join(","),
-  );
-  const csv = [header.join(","), ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "search-results.csv";
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 function groupMatchesByPage(matches: SearchMatch[]): [string, SearchMatch[]][] {
   const groups = new Map<string, SearchMatch[]>();
 
@@ -402,26 +385,14 @@ export default function HomePage() {
 
       {result && (
         <section className="space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold">Results</h2>
-              <p className="text-sm text-[var(--muted)]">
-                Scanned {result.pagesScanned} page{result.pagesScanned === 1 ? "" : "s"} on{" "}
-                <span className="font-medium text-[var(--foreground)]">{result.startUrl}</span>
-                {" · "}
-                {result.matches.length} match{result.matches.length === 1 ? "" : "es"}
-              </p>
-            </div>
-
-            {result.matches.length > 0 && (
-              <button
-                type="button"
-                onClick={() => downloadCsv(result.matches)}
-                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium hover:bg-[var(--background)]"
-              >
-                Export CSV
-              </button>
-            )}
+          <div>
+            <h2 className="text-xl font-semibold">Results</h2>
+            <p className="text-sm text-[var(--muted)]">
+              Scanned {result.pagesScanned} page{result.pagesScanned === 1 ? "" : "s"} on{" "}
+              <span className="font-medium text-[var(--foreground)]">{result.startUrl}</span>
+              {" · "}
+              {result.matches.length} match{result.matches.length === 1 ? "" : "es"}
+            </p>
           </div>
 
           {result.errors.length > 0 && (

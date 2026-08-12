@@ -28,7 +28,7 @@ Enter a URL, choose what to look for, and get back every match with the page it 
 - **Flexible input** — Enter a website URL plus a phone number, fax number, or free-text query
 - **Smart matching** — Normalizes phone/fax formats so `(555) 123-4567` matches `5551234567`
 - **Results with context** — Shows the page URL, matched value, and surrounding snippet
-- **Export** — Download results as CSV or copy to clipboard *(planned)*
+- **Results on page** — Shows the page URL, matched value, and surrounding snippet in the app
 
 ---
 
@@ -168,7 +168,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 - [x] Site crawler with configurable page limit
 - [x] Phone and fax number detection and normalization
 - [x] Custom text search
-- [x] Results table with CSV export
+- [x] Results displayed on the website grouped by page URL
 - [x] Live crawl progress indicator (streaming)
 - [ ] Respect `robots.txt`
 - [ ] Optional JavaScript rendering (Playwright)
