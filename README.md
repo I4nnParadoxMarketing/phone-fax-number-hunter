@@ -112,7 +112,7 @@ phone-fax-number-hunter/
 
 ```bash
 # Clone the repository
-git clone <repo-url>
+git clone https://github.com/I4nnParadoxMarketing/phone-fax-number-hunter.git
 cd phone-fax-number-hunter
 
 # Install dependencies
