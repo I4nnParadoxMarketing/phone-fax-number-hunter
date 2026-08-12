@@ -1,5 +1,6 @@
 import { extractFromHtml, extractLinks } from "./extractor";
-import type { CrawlProgress, SearchMatch, SearchType } from "./types";
+import { getUrlsFromSitemap } from "./sitemap";
+import type { CrawlProgress, SearchMatch, SearchType, SourceMode } from "./types";
 
 const DEFAULT_MAX_PAGES = 100;
 const DEFAULT_CRAWL_DELAY_MS = 500;
@@ -11,6 +12,7 @@ export interface CrawlOptions {
   maxPages?: number;
   crawlDelayMs?: number;
   requestTimeoutMs?: number;
+  sourceMode?: SourceMode;
   onProgress?: (progress: CrawlProgress) => void;
   onPageMatches?: (pageUrl: string, pageMatches: SearchMatch[]) => void;
 }
@@ -63,11 +65,12 @@ async function fetchPage(
   }
 }
 
-export async function crawlSite(
-  startUrl: string,
+async function scanPageList(
+  queue: string[],
   searchType: SearchType,
   query: string | undefined,
-  options: CrawlOptions = {},
+  options: CrawlOptions,
+  meta: Pick<CrawlProgress, "sourceMode" | "sitemapUrl" | "totalPagesInSitemap"> = {},
 ): Promise<{ matches: SearchMatch[]; pagesScanned: number; errors: string[] }> {
   const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
   const crawlDelayMs =
@@ -75,21 +78,7 @@ export async function crawlSite(
     (process.env.VERCEL ? VERCEL_CRAWL_DELAY_MS : DEFAULT_CRAWL_DELAY_MS);
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
-  let parsedStart: URL;
-  try {
-    parsedStart = new URL(startUrl);
-    if (parsedStart.protocol !== "http:" && parsedStart.protocol !== "https:") {
-      throw new Error("URL must use http or https");
-    }
-  } catch {
-    throw new Error("Invalid URL. Include the full address, e.g. https://example.com");
-  }
-
-  parsedStart.hash = "";
-  const normalizedStart = parsedStart.toString();
-
   const visited = new Set<string>();
-  const queue: string[] = [normalizedStart];
   const matches: SearchMatch[] = [];
   const errors: string[] = [];
   let pagesScanned = 0;
@@ -107,6 +96,7 @@ export async function crawlSite(
         matchesFound: matches.length,
         maxPages,
         status,
+        ...meta,
       });
     };
 
@@ -130,10 +120,12 @@ export async function crawlSite(
 
     reportProgress("parsed");
 
-    const links = extractLinks(result.html, new URL(currentUrl));
-    for (const link of links) {
-      if (!visited.has(link) && !queue.includes(link)) {
-        queue.push(link);
+    if (meta.sourceMode !== "sitemap") {
+      const links = extractLinks(result.html, new URL(currentUrl));
+      for (const link of links) {
+        if (!visited.has(link) && !queue.includes(link)) {
+          queue.push(link);
+        }
       }
     }
 
@@ -143,4 +135,58 @@ export async function crawlSite(
   }
 
   return { matches, pagesScanned, errors };
+}
+
+export async function crawlSite(
+  startUrl: string,
+  searchType: SearchType,
+  query: string | undefined,
+  options: CrawlOptions = {},
+): Promise<{
+  matches: SearchMatch[];
+  pagesScanned: number;
+  errors: string[];
+  sitemapUrl?: string;
+}> {
+  const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+  const sourceMode = options.sourceMode ?? "crawl";
+
+  if (sourceMode === "sitemap") {
+    options.onProgress?.({
+      pagesScanned: 0,
+      pagesQueued: 0,
+      currentUrl: startUrl.trim(),
+      matchesFound: 0,
+      maxPages,
+      status: "loading-sitemap",
+      sourceMode,
+    });
+
+    const { sitemapUrl, urls } = await getUrlsFromSitemap(startUrl, maxPages);
+
+    return scanPageList(urls, searchType, query, options, {
+      sourceMode,
+      sitemapUrl,
+      totalPagesInSitemap: urls.length,
+    }).then((result) => ({ ...result, sitemapUrl }));
+  }
+
+  let parsedStart: URL;
+  try {
+    parsedStart = new URL(startUrl);
+    if (parsedStart.protocol !== "http:" && parsedStart.protocol !== "https:") {
+      throw new Error("URL must use http or https");
+    }
+  } catch {
+    throw new Error("Invalid URL. Include the full address, e.g. https://example.com");
+  }
+
+  parsedStart.hash = "";
+  const normalizedStart = parsedStart.toString();
+
+  const result = await scanPageList([normalizedStart], searchType, query, options, {
+    sourceMode: "crawl",
+  });
+
+  return result;
 }

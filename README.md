@@ -42,8 +42,8 @@ Enter a URL, choose what to look for, and get back every match with the page it 
 └─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
 ```
 
-1. **Input** — User provides a starting URL (e.g. `https://example.com`) and a search term or number pattern.
-2. **Crawl** — The app fetches pages starting from that URL, discovers internal links, and queues them for scanning (respecting depth and page limits).
+1. **Input** — User provides a website or sitemap URL (e.g. `https://example.com` or `https://example.com/sitemap.xml`) and a search term or number pattern.
+2. **Discover pages** — **Sitemap mode** (default) loads URLs from `sitemap.xml`. **Website crawl mode** follows internal links from the starting page.
 3. **Extract & match** — Each page is parsed for phone numbers, fax numbers, and/or the custom text query.
 4. **Report** — Matches are listed with source URL, matched value, and optional context.
 
@@ -54,8 +54,9 @@ Enter a URL, choose what to look for, and get back every match with the page it 
 ### Web UI
 
 1. Open the [live app](https://phone-fax-number-hunter.vercel.app/) or run it locally.
-2. Enter the **Website URL** to scan (e.g. `https://company.com`).
-3. Choose search mode:
+2. Choose **Sitemap** (recommended) or **Website crawl**.
+3. Enter the **website or sitemap URL** (e.g. `https://company.com` or `https://company.com/sitemap.xml`).
+4. Choose search mode:
    - **Phone number** — find all phone numbers on the site
    - **Fax number** — find fax lines (by label or pattern)
    - **Custom text** — search for any string
@@ -133,13 +134,14 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ```json
 {
   "url": "https://example.com",
+  "sourceMode": "sitemap",
   "searchType": "phone",
   "query": "800-555-0199",
   "maxPages": 50
 }
 ```
 
-`searchType` must be `"phone"`, `"fax"`, or `"text"`. For `"text"`, `query` is required.
+`sourceMode` must be `"sitemap"` or `"crawl"`. `searchType` must be `"phone"`, `"fax"`, or `"text"`. For `"text"`, `query` is required.
 
 ---
 

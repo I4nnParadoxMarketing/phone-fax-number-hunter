@@ -2,7 +2,20 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { parseStreamLine, readResponseError } from "@/lib/read-response-error";
-import type { CrawlProgress, SearchMatch, SearchResponse, SearchType, SearchStreamEvent } from "@/lib/types";
+import type { CrawlProgress, SearchMatch, SearchResponse, SearchType, SearchStreamEvent, SourceMode } from "@/lib/types";
+
+const SOURCE_MODES: { value: SourceMode; label: string; description: string }[] = [
+  {
+    value: "sitemap",
+    label: "Sitemap",
+    description: "Load pages from sitemap.xml (recommended)",
+  },
+  {
+    value: "crawl",
+    label: "Website crawl",
+    description: "Follow links starting from a page URL",
+  },
+];
 
 const SEARCH_TYPES: { value: SearchType; label: string; description: string }[] = [
   {
@@ -37,6 +50,7 @@ function groupMatchesByPage(matches: SearchMatch[]): [string, SearchMatch[]][] {
 async function runSearch(
   payload: {
     url: string;
+    sourceMode: SourceMode;
     searchType: SearchType;
     query?: string;
     maxPages: number;
@@ -102,6 +116,8 @@ async function runSearch(
       if (event.type === "complete") {
         return {
           startUrl: event.startUrl,
+          sourceMode: event.sourceMode,
+          sitemapUrl: event.sitemapUrl,
           searchType: event.searchType,
           query: event.query,
           pagesScanned: event.pagesScanned,
@@ -117,6 +133,7 @@ async function runSearch(
 
 export default function HomePage() {
   const [url, setUrl] = useState("");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("sitemap");
   const [searchType, setSearchType] = useState<SearchType>("phone");
   const [query, setQuery] = useState("");
   const [maxPages, setMaxPages] = useState(10);
@@ -146,6 +163,12 @@ export default function HomePage() {
     return "Specific phone number (optional)";
   }, [searchType]);
 
+  const urlLabel = sourceMode === "sitemap" ? "Website or sitemap URL" : "Website URL";
+  const urlPlaceholder =
+    sourceMode === "sitemap"
+      ? "https://example.com or https://example.com/sitemap.xml"
+      : "https://example.com";
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
@@ -158,6 +181,7 @@ export default function HomePage() {
       const data = await runSearch(
         {
           url,
+          sourceMode,
           searchType,
           query: query.trim() || undefined,
           maxPages,
@@ -191,26 +215,60 @@ export default function HomePage() {
           Phone &amp; Fax Number Hunter
         </h1>
         <p className="max-w-2xl text-[var(--muted)]">
-          Enter a website URL and search the entire site for phone numbers, fax numbers, or
-          custom text. Results include the page URL and surrounding context.
+          Search a site using its sitemap or by crawling pages. Find phone numbers, fax numbers,
+          or custom text with the page URL and surrounding context for each match.
         </p>
       </header>
 
       <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
         <form onSubmit={handleSubmit} className="space-y-6">
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-medium">Page source</legend>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {SOURCE_MODES.map((mode) => (
+                <label
+                  key={mode.value}
+                  className={`cursor-pointer rounded-xl border p-4 transition ${
+                    sourceMode === mode.value
+                      ? "border-[var(--primary)] bg-blue-50 dark:bg-blue-950/30"
+                      : "border-[var(--border)] hover:border-[var(--primary)]"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="sourceMode"
+                    value={mode.value}
+                    checked={sourceMode === mode.value}
+                    onChange={() => setSourceMode(mode.value)}
+                    className="sr-only"
+                  />
+                  <span className="block font-medium">{mode.label}</span>
+                  <span className="mt-1 block text-sm text-[var(--muted)]">
+                    {mode.description}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
           <div className="space-y-2">
             <label htmlFor="url" className="block text-sm font-medium">
-              Website URL
+              {urlLabel}
             </label>
             <input
               id="url"
               type="url"
               required
-              placeholder="https://example.com"
+              placeholder={urlPlaceholder}
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 outline-none ring-[var(--primary)] focus:ring-2"
             />
+            {sourceMode === "sitemap" && (
+              <p className="text-xs text-[var(--muted)]">
+                Enter a domain and we will look for `/sitemap.xml`, or paste the full sitemap URL.
+              </p>
+            )}
           </div>
 
           <fieldset className="space-y-3">
@@ -302,25 +360,48 @@ export default function HomePage() {
             <div className="min-w-0 flex-1 space-y-4">
               <div>
                 <p className="font-medium">
-                  {progress.status === "fetching" ? "Fetching page…" : "Scanning page…"}
+                  {progress.status === "loading-sitemap"
+                    ? "Loading sitemap…"
+                    : progress.status === "fetching"
+                      ? "Fetching page…"
+                      : "Scanning page…"}
                 </p>
                 <p className="mt-1 text-sm text-[var(--muted)]">
-                  Page{" "}
-                  {progress.status === "fetching"
-                    ? progress.pagesScanned + 1
-                    : progress.pagesScanned}{" "}
-                  of {progress.maxPages}
-                  {progress.pagesQueued > 0 && ` · ${progress.pagesQueued} more in queue`}
+                  {progress.status === "loading-sitemap" ? (
+                    <>Reading sitemap from {progress.currentUrl}</>
+                  ) : (
+                    <>
+                      Page{" "}
+                      {progress.status === "fetching"
+                        ? progress.pagesScanned + 1
+                        : progress.pagesScanned}{" "}
+                      of {progress.maxPages}
+                      {progress.pagesQueued > 0 && ` · ${progress.pagesQueued} more in queue`}
+                    </>
+                  )}
                 </p>
+                {progress.sitemapUrl && progress.status !== "loading-sitemap" && (
+                  <p className="mt-1 break-all text-xs text-[var(--muted)]">
+                    Sitemap: {progress.sitemapUrl}
+                  </p>
+                )}
               </div>
 
               <div className="h-2 overflow-hidden rounded-full bg-[var(--background)]">
                 <div
                   className="h-full rounded-full bg-[var(--primary)] transition-all duration-300"
-                  style={{ width: `${Math.max(progressPercent, progress.pagesScanned > 0 ? 8 : 4)}%` }}
+                  style={{
+                    width: `${
+                      progress.status === "loading-sitemap"
+                        ? 8
+                        : Math.max(progressPercent, progress.pagesScanned > 0 ? 8 : 4)
+                    }%`,
+                  }}
                 />
               </div>
 
+              {progress.status !== "loading-sitemap" && (
+                <>
               <dl className="grid gap-3 text-sm sm:grid-cols-2">
                 <div>
                   <dt className="text-[var(--muted)]">Matches found</dt>
@@ -365,6 +446,8 @@ export default function HomePage() {
                   </div>
                 </div>
               )}
+                </>
+              )}
             </div>
           </div>
         </section>
@@ -390,6 +473,13 @@ export default function HomePage() {
             <p className="text-sm text-[var(--muted)]">
               Scanned {result.pagesScanned} page{result.pagesScanned === 1 ? "" : "s"} on{" "}
               <span className="font-medium text-[var(--foreground)]">{result.startUrl}</span>
+              {result.sourceMode === "sitemap" && result.sitemapUrl && (
+                <>
+                  {" · "}
+                  via sitemap{" "}
+                  <span className="font-medium text-[var(--foreground)]">{result.sitemapUrl}</span>
+                </>
+              )}
               {" · "}
               {result.matches.length} match{result.matches.length === 1 ? "" : "es"}
             </p>

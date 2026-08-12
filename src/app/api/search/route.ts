@@ -28,30 +28,38 @@ export async function POST(request: Request) {
     });
   }
 
-  const { url, searchType, query, maxPages } = validation.data;
+  const { url, sourceMode, searchType, query, maxPages } = validation.data;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        const { matches, pagesScanned, errors } = await crawlSite(url, searchType, query, {
-          maxPages,
-          onProgress: (progress) => {
-            const event: SearchStreamEvent = { type: "progress", ...progress };
-            controller.enqueue(createStreamEvent(event));
+        const { matches, pagesScanned, errors, sitemapUrl } = await crawlSite(
+          url,
+          searchType,
+          query,
+          {
+            maxPages,
+            sourceMode,
+            onProgress: (progress) => {
+              const event: SearchStreamEvent = { type: "progress", ...progress };
+              controller.enqueue(createStreamEvent(event));
+            },
+            onPageMatches: (pageUrl, pageMatches) => {
+              controller.enqueue(
+                createStreamEvent({
+                  type: "match",
+                  pageUrl,
+                  matches: pageMatches,
+                }),
+              );
+            },
           },
-          onPageMatches: (pageUrl, pageMatches) => {
-            controller.enqueue(
-              createStreamEvent({
-                type: "match",
-                pageUrl,
-                matches: pageMatches,
-              }),
-            );
-          },
-        });
+        );
 
         const response: SearchResponse = {
           startUrl: url,
+          sourceMode,
+          sitemapUrl,
           searchType,
           query,
           pagesScanned,

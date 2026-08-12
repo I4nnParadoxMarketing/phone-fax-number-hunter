@@ -1,7 +1,9 @@
 export type SearchType = "phone" | "fax" | "text";
+export type SourceMode = "sitemap" | "crawl";
 
 export interface SearchRequest {
   url: string;
+  sourceMode?: SourceMode;
   searchType: SearchType;
   query?: string;
   maxPages?: number;
@@ -20,7 +22,10 @@ export interface CrawlProgress {
   currentUrl: string;
   matchesFound: number;
   maxPages: number;
-  status: "fetching" | "parsed";
+  status: "loading-sitemap" | "fetching" | "parsed";
+  sourceMode?: SourceMode;
+  sitemapUrl?: string;
+  totalPagesInSitemap?: number;
 }
 
 export type SearchStreamEvent =
@@ -31,6 +36,8 @@ export type SearchStreamEvent =
 
 export interface SearchResponse {
   startUrl: string;
+  sourceMode: SourceMode;
+  sitemapUrl?: string;
   searchType: SearchType;
   query?: string;
   pagesScanned: number;
