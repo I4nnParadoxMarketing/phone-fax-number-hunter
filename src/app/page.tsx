@@ -1,16 +1,10 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { runResumableSearch, startResumableSearch } from "@/lib/resumable-search";
-import {
-  clearSearchSession,
-  isSessionResumable,
-  loadSearchSession,
-  saveSearchSession,
-  sessionToResponse,
-  type SearchSession,
-} from "@/lib/search-session";
+import { JOB_STORAGE_KEY } from "@/lib/job-types";
+import { readResponseError } from "@/lib/read-response-error";
 import type { CrawlProgress, SearchMatch, SearchResponse, SearchType, SourceMode } from "@/lib/types";
+import type { SearchJob } from "@/lib/job-types";
 
 const SOURCE_MODES: { value: SourceMode; label: string; description: string }[] = [
   {
@@ -43,6 +37,14 @@ const SEARCH_TYPES: { value: SearchType; label: string; description: string }[] 
   },
 ];
 
+interface JobPollResponse {
+  jobId: string;
+  job: SearchJob;
+  progress: CrawlProgress;
+  result: SearchResponse | null;
+  error?: string | null;
+}
+
 function groupMatchesByPage(matches: SearchMatch[]): [string, SearchMatch[]][] {
   const groups = new Map<string, SearchMatch[]>();
 
@@ -53,6 +55,36 @@ function groupMatchesByPage(matches: SearchMatch[]): [string, SearchMatch[]][] {
   }
 
   return [...groups.entries()];
+}
+
+async function startBackgroundJob(payload: {
+  url: string;
+  sourceMode: SourceMode;
+  searchType: SearchType;
+  query?: string;
+  maxPages: number;
+}): Promise<JobPollResponse> {
+  const response = await fetch("/api/search/job", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+
+  return response.json() as Promise<JobPollResponse>;
+}
+
+async function fetchJobStatus(jobId: string): Promise<JobPollResponse> {
+  const response = await fetch(`/api/search/job/${jobId}`, { cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response));
+  }
+
+  return response.json() as Promise<JobPollResponse>;
 }
 
 export default function HomePage() {
@@ -66,10 +98,10 @@ export default function HomePage() {
   const [liveMatches, setLiveMatches] = useState<SearchMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SearchResponse | null>(null);
-  const [pausedSession, setPausedSession] = useState<SearchSession | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [backgroundMessage, setBackgroundMessage] = useState<string | null>(null);
 
-  const shouldContinueRef = useRef(true);
-  const runningRef = useRef(false);
+  const pollTimerRef = useRef<number | null>(null);
 
   const progressPercent = useMemo(() => {
     if (!progress || progress.maxPages <= 0) return 0;
@@ -98,128 +130,106 @@ export default function HomePage() {
       ? "https://example.com or https://example.com/sitemap.xml"
       : "https://example.com";
 
-  const syncFromSession = useCallback((session: SearchSession) => {
-    setLiveMatches(session.matches);
-    setUrl(session.startUrl);
-    setSourceMode(session.sourceMode);
-    setSearchType(session.searchType);
-    setQuery(session.query ?? "");
-    setMaxPages(session.maxPages);
-
-    if (session.status === "complete") {
-      setResult(sessionToResponse(session));
-      setPausedSession(null);
-      return;
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
     }
-
-    if (session.status === "paused") {
-      setPausedSession(session);
-      setResult(session.matches.length > 0 ? sessionToResponse(session) : null);
-      return;
-    }
-
-    setPausedSession(null);
   }, []);
 
-  const executeSession = useCallback(
-    async (session: SearchSession) => {
-      if (runningRef.current) return;
-      runningRef.current = true;
+  const applyJobUpdate = useCallback((data: JobPollResponse) => {
+    setActiveJobId(data.jobId);
+    setProgress(data.progress);
+    setLiveMatches(data.job.matches);
+
+    if (data.job.startUrl) setUrl(data.job.startUrl);
+    setSourceMode(data.job.sourceMode);
+    setSearchType(data.job.searchType);
+    setQuery(data.job.query ?? "");
+    setMaxPages(data.job.maxPages);
+
+    if (data.result) {
+      setResult(data.result);
+      setBackgroundMessage(null);
+      setLoading(false);
+      stopPolling();
+      localStorage.removeItem(JOB_STORAGE_KEY);
+      return;
+    }
+
+    if (data.job.status === "failed" || data.error) {
+      setError(data.error ?? data.job.errorMessage ?? "Background search failed");
+      setLoading(false);
+      stopPolling();
+      localStorage.removeItem(JOB_STORAGE_KEY);
+      return;
+    }
+
+    setLoading(true);
+    setBackgroundMessage(
+      "Running on the server in the background. You can switch tabs or close this page — reopen later to check progress.",
+    );
+  }, [stopPolling]);
+
+  const beginPolling = useCallback(
+    (jobId: string) => {
+      stopPolling();
+      localStorage.setItem(JOB_STORAGE_KEY, jobId);
+      setActiveJobId(jobId);
       setLoading(true);
       setError(null);
-      setPausedSession(null);
       setResult(null);
-      setLiveMatches(session.matches);
-      shouldContinueRef.current = !document.hidden;
 
-      try {
-        const finalSession = await runResumableSearch(
-          session,
-          (updated) => {
-            syncFromSession(updated);
-            setLiveMatches(updated.matches);
-          },
-          setProgress,
-          () => shouldContinueRef.current,
-        );
+      void fetchJobStatus(jobId)
+        .then(applyJobUpdate)
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Could not load job status");
+          setLoading(false);
+        });
 
-        if (finalSession.status === "complete") {
-          setResult(sessionToResponse(finalSession));
-          clearSearchSession();
-          setPausedSession(null);
-        } else if (finalSession.status === "paused") {
-          syncFromSession(finalSession);
-          setError(finalSession.pauseReason ?? "Search paused. Click Resume to continue.");
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Search failed";
-        const saved = loadSearchSession();
-        if (saved && saved.status === "paused") {
-          syncFromSession(saved);
-          setError(saved.pauseReason ?? message);
-        } else {
-          setError(message);
-        }
-      } finally {
-        setLoading(false);
-        setProgress(null);
-        runningRef.current = false;
-      }
+      pollTimerRef.current = window.setInterval(() => {
+        void fetchJobStatus(jobId)
+          .then(applyJobUpdate)
+          .catch((err) => {
+            setError(err instanceof Error ? err.message : "Could not load job status");
+            setLoading(false);
+            stopPolling();
+          });
+      }, 2000);
     },
-    [syncFromSession],
+    [applyJobUpdate, stopPolling],
   );
 
   useEffect(() => {
-    const saved = loadSearchSession();
-    if (!saved) return;
+    const savedJobId = localStorage.getItem(JOB_STORAGE_KEY);
+    if (!savedJobId) return;
 
-    syncFromSession(saved);
-
-    if (saved.status === "complete") {
-      setResult(sessionToResponse(saved));
-    } else if (isSessionResumable(saved)) {
-      setError(saved.pauseReason ?? "A previous search was paused. Click Resume to continue.");
-    }
-  }, [syncFromSession]);
-
-  useEffect(() => {
-    function handleVisibilityChange() {
-      if (document.hidden) {
-        shouldContinueRef.current = false;
-        return;
-      }
-
-      shouldContinueRef.current = true;
-      const saved = loadSearchSession();
-      if (saved?.status === "paused" && isSessionResumable(saved) && !runningRef.current) {
-        setPausedSession(saved);
-        setError(saved.pauseReason ?? "Search paused. Click Resume to continue.");
-      }
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    beginPolling(savedJobId);
+    return () => stopPolling();
+    // Resume the saved background job once on page load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    clearSearchSession();
-    setPausedSession(null);
+    stopPolling();
+    localStorage.removeItem(JOB_STORAGE_KEY);
     setError(null);
+    setResult(null);
+    setBackgroundMessage(null);
+    setLoading(true);
+    setProgress({
+      pagesScanned: 0,
+      pagesQueued: 0,
+      currentUrl: url,
+      matchesFound: 0,
+      maxPages,
+      status: sourceMode === "sitemap" ? "loading-sitemap" : "fetching",
+      sourceMode,
+    });
 
     try {
-      setLoading(true);
-      setProgress({
-        pagesScanned: 0,
-        pagesQueued: 0,
-        currentUrl: url,
-        matchesFound: 0,
-        maxPages,
-        status: sourceMode === "sitemap" ? "loading-sitemap" : "fetching",
-        sourceMode,
-      });
-
-      const session = await startResumableSearch({
+      const data = await startBackgroundJob({
         url,
         sourceMode,
         searchType,
@@ -227,32 +237,13 @@ export default function HomePage() {
         maxPages,
       });
 
-      saveSearchSession(session);
-      await executeSession(session);
+      applyJobUpdate(data);
+      beginPolling(data.jobId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
       setLoading(false);
       setProgress(null);
     }
-  }
-
-  async function handleResume() {
-    const saved = loadSearchSession();
-    if (!saved || !isSessionResumable(saved)) return;
-
-    saved.status = "running";
-    saved.pauseReason = undefined;
-    saveSearchSession(saved);
-    setError(null);
-    await executeSession(saved);
-  }
-
-  function handleDiscardPaused() {
-    clearSearchSession();
-    setPausedSession(null);
-    setError(null);
-    setLiveMatches([]);
-    setResult(null);
   }
 
   return (
@@ -265,44 +256,27 @@ export default function HomePage() {
           Phone &amp; Fax Number Hunter
         </h1>
         <p className="max-w-2xl text-[var(--muted)]">
-          Search a site using its sitemap or by crawling pages. Progress saves automatically — if
-          your laptop sleeps or the network drops, reopen the site and click Resume.
+          Searches run on the server in the background. Switch tabs, close the browser, or let your
+          laptop sleep — the scan keeps going on Vercel.
         </p>
         <p className="text-sm text-[var(--muted)]">
-          For long scans, use the live site{" "}
+          Use the live site{" "}
           <a
             href="https://phone-fax-number-hunter.vercel.app/"
             className="text-[var(--primary)] hover:underline"
           >
             phone-fax-number-hunter.vercel.app
           </a>{" "}
-          instead of localhost so scanning runs in the cloud.
+          for background scans (requires Vercel Blob storage).
         </p>
       </header>
 
-      {pausedSession && !loading && (
-        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900 dark:bg-amber-950/30">
-          <h2 className="font-semibold text-amber-950 dark:text-amber-100">Paused search</h2>
-          <p className="mt-1 text-sm text-amber-900 dark:text-amber-200">
-            {pausedSession.pauseReason ??
-              `Scanned ${pausedSession.nextIndex} of ${pausedSession.pageUrls.length} pages.`}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={handleResume}
-              className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--primary-hover)]"
-            >
-              Resume search
-            </button>
-            <button
-              type="button"
-              onClick={handleDiscardPaused}
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium hover:bg-[var(--background)]"
-            >
-              Discard saved progress
-            </button>
-          </div>
+      {backgroundMessage && loading && (
+        <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+          {backgroundMessage}
+          {activeJobId && (
+            <p className="mt-2 text-xs opacity-80">Job ID: {activeJobId}</p>
+          )}
         </section>
       )}
 
@@ -350,11 +324,6 @@ export default function HomePage() {
               onChange={(e) => setUrl(e.target.value)}
               className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 outline-none ring-[var(--primary)] focus:ring-2"
             />
-            {sourceMode === "sitemap" && (
-              <p className="text-xs text-[var(--muted)]">
-                Enter a domain and we will look for `/sitemap.xml`, or paste the full sitemap URL.
-              </p>
-            )}
           </div>
 
           <fieldset className="space-y-3">
@@ -417,9 +386,6 @@ export default function HomePage() {
                 onChange={(e) => setMaxPages(Number(e.target.value))}
                 className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 outline-none ring-[var(--primary)] focus:ring-2"
               />
-              <p className="text-xs text-[var(--muted)]">
-                Progress saves after each page. Resume anytime if your connection drops or laptop sleeps.
-              </p>
             </div>
           </div>
 
@@ -428,51 +394,28 @@ export default function HomePage() {
             disabled={loading}
             className="inline-flex items-center justify-center rounded-lg bg-[var(--primary)] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Scanning site…" : "Search site"}
+            {loading ? "Scanning in background…" : "Search site"}
           </button>
         </form>
       </section>
 
       {loading && progress && (
-        <section
-          className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm"
-          aria-live="polite"
-        >
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm" aria-live="polite">
           <div className="flex items-start gap-4">
-            <div
-              className="mt-1 h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]"
-              aria-hidden="true"
-            />
+            <div className="mt-1 h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
             <div className="min-w-0 flex-1 space-y-4">
               <div>
-                <p className="font-medium">
-                  {progress.status === "loading-sitemap"
-                    ? "Loading sitemap…"
-                    : progress.status === "fetching"
-                      ? "Fetching page…"
-                      : "Scanning page…"}
-                </p>
+                <p className="font-medium">Background scan running</p>
                 <p className="mt-1 text-sm text-[var(--muted)]">
-                  Page{" "}
-                  {progress.status === "fetching"
-                    ? progress.pagesScanned + 1
-                    : progress.pagesScanned}{" "}
-                  of {progress.maxPages}
+                  Page {progress.pagesScanned} of {progress.maxPages}
                   {progress.pagesQueued > 0 && ` · ${progress.pagesQueued} more in queue`}
                 </p>
-                {progress.sitemapUrl && (
-                  <p className="mt-1 break-all text-xs text-[var(--muted)]">
-                    Sitemap: {progress.sitemapUrl}
-                  </p>
-                )}
               </div>
 
               <div className="h-2 overflow-hidden rounded-full bg-[var(--background)]">
                 <div
                   className="h-full rounded-full bg-[var(--primary)] transition-all duration-300"
-                  style={{
-                    width: `${Math.max(progressPercent, progress.pagesScanned > 0 ? 8 : 4)}%`,
-                  }}
+                  style={{ width: `${Math.max(progressPercent, progress.pagesScanned > 0 ? 8 : 4)}%` }}
                 />
               </div>
 
@@ -488,7 +431,7 @@ export default function HomePage() {
               </dl>
 
               <div>
-                <p className="text-sm text-[var(--muted)]">Currently searching</p>
+                <p className="text-sm text-[var(--muted)]">Latest page checked</p>
                 <p className="mt-1 break-all text-sm font-medium">{progress.currentUrl}</p>
               </div>
 
@@ -497,19 +440,9 @@ export default function HomePage() {
                   <p className="text-sm font-medium">Found on these pages</p>
                   <div className="space-y-3">
                     {groupedLiveMatches.map(([pageUrl, pageMatches]) => (
-                      <div
-                        key={pageUrl}
-                        className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-3"
-                      >
-                        <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-                          Page URL
-                        </p>
-                        <a
-                          href={pageUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-1 block break-all text-sm text-[var(--primary)] hover:underline"
-                        >
+                      <div key={pageUrl} className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-3">
+                        <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Page URL</p>
+                        <a href={pageUrl} target="_blank" rel="noopener noreferrer" className="mt-1 block break-all text-sm text-[var(--primary)] hover:underline">
                           {pageUrl}
                         </a>
                         <p className="mt-2 text-xs text-[var(--muted)]">
@@ -522,13 +455,6 @@ export default function HomePage() {
               )}
             </div>
           </div>
-        </section>
-      )}
-
-      {loading && !progress && (
-        <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] px-6 py-8 text-center">
-          <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
-          <p className="font-medium">Starting site scan…</p>
         </section>
       )}
 
@@ -546,11 +472,7 @@ export default function HomePage() {
               Scanned {result.pagesScanned} page{result.pagesScanned === 1 ? "" : "s"} on{" "}
               <span className="font-medium text-[var(--foreground)]">{result.startUrl}</span>
               {result.sourceMode === "sitemap" && result.sitemapUrl && (
-                <>
-                  {" · "}
-                  via sitemap{" "}
-                  <span className="font-medium text-[var(--foreground)]">{result.sitemapUrl}</span>
-                </>
+                <> · via sitemap <span className="font-medium text-[var(--foreground)]">{result.sitemapUrl}</span></>
               )}
               {" · "}
               {result.matches.length} match{result.matches.length === 1 ? "" : "es"}
@@ -560,39 +482,27 @@ export default function HomePage() {
           {result.errors.length > 0 && (
             <details className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
               <summary className="cursor-pointer font-medium">
-                {result.errors.length} page fetch warning
-                {result.errors.length === 1 ? "" : "s"}
+                {result.errors.length} page fetch warning{result.errors.length === 1 ? "" : "s"}
               </summary>
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 {result.errors.slice(0, 10).map((item) => (
                   <li key={item}>{item}</li>
                 ))}
-                {result.errors.length > 10 && <li>…and {result.errors.length - 10} more</li>}
               </ul>
             </details>
           )}
 
           {result.matches.length === 0 ? (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-8 text-center text-[var(--muted)]">
-              No matches found. Try a different query or increase the page limit.
+              No matches found.
             </div>
           ) : (
             <div className="space-y-4">
               {groupedResults.map(([pageUrl, pageMatches]) => (
-                <article
-                  key={pageUrl}
-                  className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]"
-                >
+                <article key={pageUrl} className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
                   <div className="border-b border-[var(--border)] bg-[var(--background)] px-4 py-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-                      Page URL
-                    </p>
-                    <a
-                      href={pageUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-1 block break-all font-medium text-[var(--primary)] hover:underline"
-                    >
+                    <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Page URL</p>
+                    <a href={pageUrl} target="_blank" rel="noopener noreferrer" className="mt-1 block break-all font-medium text-[var(--primary)] hover:underline">
                       {pageUrl}
                     </a>
                   </div>
@@ -612,8 +522,7 @@ export default function HomePage() {
       )}
 
       <footer className="mt-auto border-t border-[var(--border)] pt-6 text-center text-sm text-[var(--muted)]">
-        Built by{" "}
-        <span className="font-medium text-[var(--foreground)]">Paradox Marketing</span>
+        Built by <span className="font-medium text-[var(--foreground)]">Paradox Marketing</span>
       </footer>
     </main>
   );

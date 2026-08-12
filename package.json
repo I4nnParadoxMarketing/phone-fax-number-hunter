@@ -10,6 +10,7 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "cheerio": "^1.0.0",
     "libphonenumber-js": "^1.12.6",
     "next": "^15.2.0",
